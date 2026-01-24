@@ -46,6 +46,14 @@ def make_env_from_config(config: dict, seed: int):
     noises = config.get("wrapper_noise_level", [0.0])
     scales_test = config.get("wrapper_scale_test", [0.0])
     noises_test = config.get("wrapper_noise_level_test", [0.0])
+    main_engine_power_range = config.get("wrapper_main_engine_power_range")
+    side_engine_power_range = config.get("wrapper_side_engine_power_range")
+    wind_power_range = config.get("wrapper_wind_power_range")
+    turbulence_power_range = config.get("wrapper_turbulence_power_range")
+    main_engine_power_range_test = config.get("wrapper_main_engine_power_range_test")
+    side_engine_power_range_test = config.get("wrapper_side_engine_power_range_test")
+    wind_power_range_test = config.get("wrapper_wind_power_range_test")
+    turbulence_power_range_test = config.get("wrapper_turbulence_power_range_test")
 
     assert len(scales) == len(noises), (
         f"wrapper_scale and wrapper_noise_level must have same length "
@@ -60,11 +68,21 @@ def make_env_from_config(config: dict, seed: int):
     for i, _ in enumerate(scales):
         env = LunarLander(**ctor_kwargs)
         if wrapper_cls is not None:
-            env = wrapper_cls(
-                env,
-                scale=scales[i],
-                noise_level=noises[i],
-            )
+            wrapper_kwargs = {
+                "scale": scales[i],
+                "noise_level": noises[i],
+            }
+            if wrapper_name == "implicit_shifted":
+                if main_engine_power_range is not None:
+                    wrapper_kwargs["main_engine_power_range"] = main_engine_power_range[i]
+                if side_engine_power_range is not None:
+                    wrapper_kwargs["side_engine_power_range"] = side_engine_power_range[i]
+            elif wrapper_name == "implicit_static":
+                if wind_power_range is not None:
+                    wrapper_kwargs["wind_power_range"] = wind_power_range[i]
+                if turbulence_power_range is not None:
+                    wrapper_kwargs["turbulence_power_range"] = turbulence_power_range[i]
+            env = wrapper_cls(env, **wrapper_kwargs)
         env.reset(seed=seed)
         envs.append(env)
 
@@ -72,11 +90,21 @@ def make_env_from_config(config: dict, seed: int):
     for i, _ in enumerate(scales_test):
         env = LunarLander(**ctor_kwargs)
         if wrapper_cls is not None:
-            env = wrapper_cls(
-                env,
-                scale=scales_test[i],
-                noise_level=noises_test[i],
-            )
+            wrapper_kwargs = {
+                "scale": scales_test[i],
+                "noise_level": noises_test[i],
+            }
+            if wrapper_name == "implicit_shifted":
+                if main_engine_power_range is not None:
+                    wrapper_kwargs["main_engine_power_range"] = main_engine_power_range_test[i]
+                if side_engine_power_range is not None:
+                    wrapper_kwargs["side_engine_power_range"] = side_engine_power_range_test[i]
+            elif wrapper_name == "implicit_static":
+                if wind_power_range is not None:
+                    wrapper_kwargs["wind_power_range"] = wind_power_range_test[i]
+                if turbulence_power_range is not None:
+                    wrapper_kwargs["turbulence_power_range"] = turbulence_power_range_test[i]
+            env = wrapper_cls(env, **wrapper_kwargs)
         env.reset(seed=seed)
         test_envs.append(env)
 

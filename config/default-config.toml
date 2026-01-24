@@ -1,21 +1,21 @@
 [RUN]
 seed = 7
-episodes = 3000
+episodes = 5000
 max_steps = 1000
 evaluation_episodes = 20
 save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Lunar-lander-LSTMDoubleDQN-explicit_static-1.0-0.0noise"
+title = "Lunar-lander-DoubleDQN"
 
 [AGENT]
 device = "cpu"
-recurrent = true
+recurrent = false
 network_hidden_layers = [128, 64]
 lr = 0.0001
 lr_decay = 1.0
-replay_buffer_size = 100000
+replay_buffer_size = 50000
 batch_size = 64
 gamma = 0.99
 steps_before_learning = 500
@@ -34,8 +34,8 @@ wind_power = 15.0
 turbulence_power = 1.5
 main_engine_power = 13.0
 side_engine_power = 0.6
-wrapper_class = "explicit_static"
+wrapper_class = "none"
 wrapper_scale = [1.0]
-wrapper_noise_level = [0.0]
+wrapper_noise_level = [0.001]
 wrapper_scale_test = [0.0]
 wrapper_noise_level_test = [0.0]

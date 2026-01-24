@@ -229,6 +229,30 @@ default=[0.01]
 help="Wrapper noise level to be used for the env(If wrapper is used)"
 type="list"
 
+[ENVIRONMENT.wrapper_main_engine_power_range]
+key="--wrapper-main-engine-power-range"
+default=[[12.0, 14.0]]
+help="Range [min, max] for MAIN_ENGINE_POWER in implicit_shifted wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_side_engine_power_range]
+key="--wrapper-side-engine-power-range"
+default=[[0.5, 0.7]]
+help="Range [min, max] for SIDE_ENGINE_POWER in implicit_shifted wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_wind_power_range]
+key="--wrapper-wind-power-range"
+default=[[13.5, 16.5]]
+help="Range [min, max] for wind_power in implicit_static wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_turbulence_power_range]
+key="--wrapper-turbulence-power-range"
+default=[[1.25, 2.75]]
+help="Range [min, max] for turbulence_power in implicit_static wrapper"
+type="list"
+
 [ENVIRONMENT.wrapper_scale_test]
 key="--wrapper-scale-test"
 default=[5.0]
@@ -239,4 +263,28 @@ type="list"
 key="--wrapper-noise-level-test"
 default=[0.0]
 help="Wrapper noise level to be used for the test env(If wrapper is used)"
+type="list"
+
+[ENVIRONMENT.wrapper_main_engine_power_range_test]
+key="--wrapper-main-engine-power-range-test"
+default=[[11.0, 15.0]]
+help="Range [min, max] for MAIN_ENGINE_POWER in implicit_shifted wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_side_engine_power_range_test]
+key="--wrapper-side-engine-power-range-test"
+default=[[0.4, 0.8]]
+help="Range [min, max] for SIDE_ENGINE_POWER in implicit_shifted wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_wind_power_range_test]
+key="--wrapper-wind-power-range-test"
+default=[[12.5, 17.5]]
+help="Range [min, max] for wind_power in implicit_static wrapper"
+type="list"
+
+[ENVIRONMENT.wrapper_turbulence_power_range_test]
+key="--wrapper-turbulence-power-range-test"
+default=[[1.0, 2.0]]
+help="Range [min, max] for turbulence_power in implicit_static wrapper"
 type="list"
