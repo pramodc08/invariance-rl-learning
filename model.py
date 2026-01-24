@@ -22,31 +22,32 @@ def init_weights(m):
             elif 'bias' in name:
                 nn.init.constant_(param.data, 0.0)
 
+
 class DeepQNetwork(nn.Module):
     """
     Vanilla MLP (Feed-Forward) DQN.
     """
-    def __init__(self, input_dims, n_actions, device, fc1_dims=128, fc2_dims=64):
-        super(DeepQNetwork, self).__init__()
+    def __init__(self, input_dims: int, n_actions: int, device, network_hidden_layers=(128, 64)):
+        super().__init__()
         self.input_dims = input_dims
         self.n_actions = n_actions
-        self.fc1_dims = fc1_dims
-        self.fc2_dims = fc2_dims
         self.device = device
-        
-        self.fc1 = nn.Linear(self.input_dims, self.fc1_dims)
-        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
-        self.fc3 = nn.Linear(self.fc2_dims, self.n_actions)
-        
+
+        dims = [input_dims] + list(network_hidden_layers) + [n_actions]
+
+        self.fcs = nn.ModuleList(
+            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
+        )
+
         self.apply(init_weights)
         self.to(self.device)
 
     def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        actions = self.fc3(x)
-        
-        return actions
+        x = state
+        for layer in self.fcs[:-1]:
+            x = F.relu(layer(x))
+        q = self.fcs[-1](x)
+        return q
     
     def init_hidden(self, *args, **kwargs):
         """
@@ -58,56 +59,62 @@ class DeepQNetwork(nn.Module):
 class RecurrentDeepQNetwork(nn.Module):
     """
     Sequential LSTM based DQN.
+    Config-driven structure from network_hidden_layers:
+      h0 -> encoder dim
+      h1 -> LSTM hidden size
+      h2.. -> head MLP dims (optional)
     """
-    def __init__(self, input_dims, n_actions, device, fc1_dims=128, hidden_size=64, num_layers=1):
-        super(RecurrentDeepQNetwork, self).__init__()
+    def __init__(self, input_dims, n_actions, device, network_hidden_layers, num_layers=1):
+        super().__init__()
         self.input_dims = input_dims
         self.n_actions = n_actions
-        self.fc1_dims = fc1_dims
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
         self.device = device
-        
-        # 1. Feature Extractor
-        self.fc1 = nn.Linear(self.input_dims, self.fc1_dims)
-        
-        # 2. LSTM Layer
-        # batch_first=True expects input: (Batch, Seq, Feature)
-        self.lstm = nn.LSTM(input_size=self.fc1_dims, 
-                            hidden_size=self.hidden_size, 
-                            num_layers=self.num_layers, 
-                            batch_first=True)
-        
-        # 3. Output Layer
-        self.fc_out = nn.Linear(self.hidden_size, self.n_actions)
-        
+        self.num_layers = num_layers
+
+        if not isinstance(network_hidden_layers, (list, tuple)) or len(network_hidden_layers) < 1:
+            raise ValueError("network_hidden_layers must be a list/tuple with at least 1 element")
+
+        # --- Parse config list without adding any new config fields ---
+        h = list(network_hidden_layers)
+
+        encoder_dim = int(h[0])
+        lstm_hidden = int(h[1]) if len(h) >= 2 else int(h[0])   # fallback if only one provided
+        head_dims = [int(x) for x in h[2:]]                     # may be empty
+
+        self.hidden_size = lstm_hidden
+
+        # 1) Encoder (single layer as per "one encoder")
+        self.encoder = nn.Linear(self.input_dims, encoder_dim)
+
+        # 2) LSTM core
+        self.lstm = nn.LSTM(
+            input_size=encoder_dim,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            batch_first=True,
+        )
+
+        # 3) Head MLP (0..N layers) then output
+        dims = [self.hidden_size] + head_dims + [self.n_actions]
+        self.head = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
+
         self.apply(init_weights)
         self.to(self.device)
 
     def forward(self, state, hidden=None):
-        """
-        state: Tensor of shape (Batch, Input_Dims)
-        hidden: Tuple (h_0, c_0) or None
-        """
-        # 1. Feature Extraction
-        x = F.relu(self.fc1(state))
-        
-        # 2. Reshape for LSTM
-        # LSTM expects a sequence dimension. Since we are doing 1 step at a time:
-        # Reshape (Batch, Features) -> (Batch, 1, Features)
-        x = x.unsqueeze(1)
-        
-        # 3. LSTM Pass
-        # If hidden is None, LSTM defaults to zeros
+        # state: (B, input_dims)
+        x = F.relu(self.encoder(state))     # (B, encoder_dim)
+
+        x = x.unsqueeze(1)                  # (B, 1, encoder_dim)
         lstm_out, new_hidden = self.lstm(x, hidden)
-        
-        # 4. Output Logic
-        # lstm_out shape is (Batch, 1, Hidden_Size). We need to remove the sequence dim.
-        x = lstm_out.squeeze(1)
-        
-        actions = self.fc_out(x)
-        
-        return actions, new_hidden
+        x = lstm_out.squeeze(1)             # (B, hidden_size)
+
+        # head MLP
+        for layer in self.head[:-1]:
+            x = F.relu(layer(x))
+        q = self.head[-1](x)                # (B, n_actions)
+
+        return q, new_hidden
 
     def init_hidden(self, batch_size):
         """

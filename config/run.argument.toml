@@ -1,0 +1,224 @@
+[RUN]
+# Arguments for the run. will be generated using this toml file
+# Later defaults can be changed with config files
+
+#Hyperparameters for run
+[RUN.seed]
+key="--seed"
+default=7
+help="Random seed."
+type="int"
+
+[RUN.episodes]
+key="--episodes"
+default=3000
+help="Number of epsiodes."
+type="int"
+
+[RUN.max_steps]
+key="--max-steps"
+default=1000
+help="Number of max steps per episode."
+type="int"
+
+[RUN.evaluation_episodes]
+key="--evaluation-episodes"
+default=20
+help="Episodes interval over which to evaluate during training."
+type="int"
+
+[RUN.save_dir]
+key="--save-dir"
+default="model"
+help="Output directory for model."
+type="str"
+
+[RUN.save_frames]
+key="--save-frames"
+default=false
+help="Flag to save visualization."
+type="bool"
+
+[RUN.visualization_path]
+key="--visualization-path"
+default="videos"
+help="Path for saving visualization."
+type="str"
+
+[RUN.log_dir]
+key="--log-dir"
+default="logs"
+help="Output directory for training logs."
+type="str"
+
+[RUN.title]
+key="--title"
+default="Lunar-lander"
+help="Prefix of output files"
+type="str"
+
+[AGENT]
+
+[AGENT.recurrent]
+key="--recurrent"
+default=false
+help="Use recurrent network or vanilla MLP"
+type="bool"
+
+[AGENT.replay_buffer_size]
+key="--replay-buffer-size"
+default=10000
+help="Size of replay buffer"
+type="int"
+
+[AGENT.epsilon_initial]
+key="--epsilon-initial"
+default=1.0
+help="Initial Epsilon for training"
+type="float"
+
+[AGENT.epsilon_final]
+key="--epsilon-final"
+default=0.01
+help="Final Epsilon for training"
+type="float"
+
+[AGENT.epsilon_decay]
+key="--epsilon-decay"
+default=0.995
+help="Decay to linearly reduce epsilon"
+type="float"
+
+[AGENT.batch_size]
+key="--batch-size"
+default=64
+help="Batch size sample from replay buffer for training"
+type="int"
+
+[AGENT.gamma]
+key="--gamma"
+default=0.99
+help="Discount factor."
+type="float"
+
+[AGENT.steps_before_learning]
+key="--steps-before-learning"
+default=500
+help="Warmup steps to be taken beofre learning."
+type="int"
+
+[AGENT.clip_grad]
+key="--clip-grad"
+default=1.0
+help="Gradient clipping for training."
+type="float"
+
+[AGENT.device]
+key="--device"
+default="cpu"
+help="Device to be used for NN."
+type="str"
+
+[AGENT.lr]
+key="--lr"
+default=0.0005
+help="Learning rate for network."
+type="float"
+
+[AGENT.lr_decay]
+key="--lr-decay"
+default=0.9999
+help="Learning decay rate."
+type="float"
+
+[AGENT.tau]
+key="--tau"
+default=0.001
+help="Model update rate for network."
+type="float"
+
+[AGENT.network_hidden_layers]
+key="--network-hidden-layers"
+default=[128, 64]
+help="Hidden layers for network."
+type="list"
+
+[AGENT.network_update_freq]
+key="--network-update-freq"
+default=5
+help="Network update frequency."
+type="int"
+
+[AGENT.n_epochs]
+key="--n-epochs"
+default=5
+help="Epochs for network update"
+type="int"
+
+[ENVIRONMENT]
+
+[ENVIRONMENT.gravity]
+key="--gravity"
+default=-10.0
+help="Gravity value of the environment"
+type="float"
+
+[ENVIRONMENT.enable_wind]
+key="--enable-wind"
+default=false
+help="Enable wind for the environment."
+type="bool"
+
+[ENVIRONMENT.wind_power]
+key="--wind-power"
+default=15.0
+help="Wind power value of the environment(If wind is enabled)"
+type="float"
+
+[ENVIRONMENT.turbulence_power]
+key="--turbulence-power"
+default=1.5
+help="Turbulence power value of the environment(If wind is enabled)"
+type="float"
+
+[ENVIRONMENT.main_engine_power]
+key="--main-engine-power"
+default=13.0
+help="Main engine power value of the environment"
+type="float"
+
+[ENVIRONMENT.side_engine_power]
+key="--side-engine-power"
+default=0.6
+help="Side engine power value of the environment"
+type="float"
+
+[ENVIRONMENT.wrapper_class]
+key="--wrapper-class"
+default="none"
+help="Wrapper class to be used for the env in lower string(No wrapper if set to none)"
+type="str"
+
+[ENVIRONMENT.wrapper_scale]
+key="--wrapper-scale"
+default=[5.0]
+help="Wrapper scale to be used for the env(If wrapper is used)"
+type="list"
+
+[ENVIRONMENT.wrapper_noise_level]
+key="--wrapper-noise-level"
+default=[0.01]
+help="Wrapper noise level to be used for the env(If wrapper is used)"
+type="list"
+
+[ENVIRONMENT.wrapper_scale_test]
+key="--wrapper-scale-test"
+default=[5.0]
+help="Wrapper scale to be used for the test env(If wrapper is used)"
+type="list"
+
+[ENVIRONMENT.wrapper_noise_level_test]
+key="--wrapper-noise-level-test"
+default=[0.0]
+help="Wrapper noise level to be used for the test env(If wrapper is used)"
+type="list"

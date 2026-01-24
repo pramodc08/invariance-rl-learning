@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -9,9 +11,10 @@ from model import DeepQNetwork, RecurrentDeepQNetwork
 from buffers import ReplayBuffer, HiddenStateReplayBuffer
 
 class Agent:
-    def __init__(self, state_size, action_size, device, recurrent=False, 
-                 lr=5e-4, buffer_size=100000, batch_size=64, gamma=0.99, 
-                 tau=1e-3, update_every=5, n_epochs=1):
+    def __init__(self, state_size, action_size, device, network_hidden_layers=(128, 64), recurrent=False,
+                 lr=5e-4, buffer_size=100000, batch_size=64, gamma=0.99,
+                 tau=1e-3, update_every=5, n_epochs=1, steps_before_learning=0,
+                 clip_grad=1.0, lr_decay=1.0):
         
         self.state_size = state_size
         self.action_size = action_size
@@ -22,24 +25,29 @@ class Agent:
         self.tau = tau
         self.update_every = update_every
         self.n_epochs = n_epochs
+        self.steps_before_learning = 0 if steps_before_learning is None else max(0, int(steps_before_learning))
+        self.clip_grad = clip_grad
+        self.lr_decay = lr_decay
+        self.network_hidden_layers=network_hidden_layers
 
         # Q-Network & Memory Initialization
         if self.recurrent:
             # LSTM Mode
             print("Initializing Recurrent DQN Agent (LSTM)...")
-            self.qnetwork_local = RecurrentDeepQNetwork(state_size, action_size, device).to(device)
-            self.qnetwork_target = RecurrentDeepQNetwork(state_size, action_size, device).to(device)
+            self.qnetwork_local = RecurrentDeepQNetwork(state_size, action_size, device, network_hidden_layers=network_hidden_layers).to(device)
+            self.qnetwork_target = RecurrentDeepQNetwork(state_size, action_size, device, network_hidden_layers=network_hidden_layers).to(device)
             self.memory = HiddenStateReplayBuffer(action_size, buffer_size, batch_size, device)
         else:
             # Vanilla MLP Mode
             print("Initializing Vanilla DQN Agent (MLP)...")
-            self.qnetwork_local = DeepQNetwork(state_size, action_size, device).to(device)
-            self.qnetwork_target = DeepQNetwork(state_size, action_size, device).to(device)
+            self.qnetwork_local = DeepQNetwork(state_size, action_size, device, network_hidden_layers=network_hidden_layers).to(device)
+            self.qnetwork_target = DeepQNetwork(state_size, action_size, device, network_hidden_layers=network_hidden_layers).to(device)
             self.memory = ReplayBuffer(action_size, buffer_size, batch_size, device)
         
         print(self.qnetwork_local)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
         self.t_step = 0
+        self.total_steps = 0
 
     def step(self, state, action, reward, next_state, done, hidden=None, next_hidden=None):
         """
@@ -52,8 +60,11 @@ class Agent:
         else:
             self.memory.add(state, action, reward, next_state, done)
 
-        # Learn every UPDATE_EVERY time steps
+        # Learn every UPDATE_EVERY time steps (after warmup)
+        self.total_steps += 1
         self.t_step = (self.t_step + 1) % self.update_every
+        if self.total_steps < self.steps_before_learning:
+            return
         if self.t_step == 0:
             if len(self.memory) > self.batch_size:
                 experiences = self.memory.sample()
@@ -128,8 +139,12 @@ class Agent:
             # Minimize loss
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), 1.0)
+            if self.clip_grad is not None and self.clip_grad > 0:
+                torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), self.clip_grad)
             self.optimizer.step()
+            if self.lr_decay is not None and self.lr_decay != 1.0:
+                for param_group in self.optimizer.param_groups:
+                    param_group["lr"] *= self.lr_decay
 
         # ------------------- Update Target Network ------------------- #
         self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
@@ -140,4 +155,38 @@ class Agent:
         """
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
+
+    def save_checkpoint(self, path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint = {
+            "qnetwork_local": self.qnetwork_local.state_dict(),
+            "qnetwork_target": self.qnetwork_target.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "t_step": self.t_step,
+            "total_steps": self.total_steps,
+            "recurrent": self.recurrent,
+            "network_hidden_layers": self.network_hidden_layers,
+            "gamma": self.gamma,
+            "tau": self.tau,
+            "update_every": self.update_every,
+            "n_epochs": self.n_epochs,
+            "steps_before_learning": self.steps_before_learning,
+            "clip_grad": self.clip_grad,
+            "lr_decay": self.lr_decay,
+        }
+        torch.save(checkpoint, path)
+
+    def load_checkpoint(self, path, strict=True):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.qnetwork_local.load_state_dict(checkpoint["qnetwork_local"], strict=strict)
+        target_state = checkpoint.get("qnetwork_target", checkpoint["qnetwork_local"])
+        self.qnetwork_target.load_state_dict(target_state, strict=strict)
+        if "optimizer" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.t_step = checkpoint.get("t_step", 0)
+        self.total_steps = checkpoint.get("total_steps", 0)
+        self.steps_before_learning = checkpoint.get("steps_before_learning", self.steps_before_learning)
+        self.clip_grad = checkpoint.get("clip_grad", self.clip_grad)
+        self.lr_decay = checkpoint.get("lr_decay", self.lr_decay)
 

@@ -1,0 +1,41 @@
+[RUN]
+seed = 7
+episodes = 3000
+max_steps = 1000
+evaluation_episodes = 20
+save_dir = "model"
+save_frames = false
+visualization_path = "videos"
+log_dir = "logs"
+title = "Lunar-lander"
+
+[AGENT]
+device = "cpu"
+recurrent = false
+network_hidden_layers = [64, 64]
+lr = 0.0005
+lr_decay = 1.0
+replay_buffer_size = 10000
+batch_size = 64
+gamma = 0.99
+steps_before_learning = 500
+clip_grad = 1.0
+tau = 0.001
+network_update_freq = 5
+n_epochs = 5
+epsilon_initial = 1.0
+epsilon_final = 0.01
+epsilon_decay = 0.995
+
+[ENVIRONMENT]
+gravity = -10.0
+enable_wind = false
+wind_power = 15.0
+turbulence_power = 1.5
+main_engine_power = 13.0
+side_engine_power = 0.6
+wrapper_class = "none"
+wrapper_scale = [5.0]
+wrapper_noise_level = [0.01]
+wrapper_scale_test = [5.0]
+wrapper_noise_level_test = [0.0]
