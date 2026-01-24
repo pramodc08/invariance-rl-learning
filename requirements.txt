@@ -6,3 +6,4 @@ numpy~=2.2.3
 matplotlib~=3.10.8 
 swig~=4.4.1
 toml~=0.10.2
+tensorboard~=2.20.0

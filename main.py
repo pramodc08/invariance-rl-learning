@@ -1,5 +1,7 @@
+import os
 import toml
 import math
+from datetime import datetime
 import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,6 +22,7 @@ from wrapper import (
 )
 from agent import Agent
 from utils import argparse_generator, set_seed
+from torch.utils.tensorboard import SummaryWriter
 
 
 WRAPPER_REGISTRY = {
@@ -112,6 +115,20 @@ def run(config: dict):
         n_epochs=agent_config["n_epochs"],
     )
 
+    run_name = f"{run_config.get('title', 'run')}_{seed}"
+    log_dir = os.path.join(run_config.get("log_dir", "logs"), run_name)
+    writer = SummaryWriter(log_dir=log_dir)
+    save_dir = os.path.join(run_config.get("save_dir", "model"), run_name)
+    with open(os.path.join(log_dir, "config.json"), "w") as f:
+        toml.dump(config, f)
+    os.makedirs(save_dir, exist_ok=True)
+    checkpoint_path = os.path.join(save_dir, "checkpoint.pt")
+    best_path = os.path.join(save_dir, "best.pt")
+    save_freq = int(run_config.get("save_freq", 100))
+    save_best = bool(run_config.get("save_best", True))
+    restart = bool(run_config.get("restart", False))
+    best_metric = -float("inf")
+
     n_envs = len(envs)
     n_test_envs = len(test_envs)
     train_returns = [[] for _ in range(n_envs)]
@@ -127,8 +144,15 @@ def run(config: dict):
     max_steps = run_config["max_steps"]
     evaluation_episodes = run_config["evaluation_episodes"]
     eps = epsilon_initial
+    start_episode = 1
+    if not restart and os.path.exists(checkpoint_path):
+        metadata = agent.load_checkpoint(checkpoint_path)
+        eps = float(metadata.get("epsilon", eps))
+        start_episode = int(metadata.get("episode", 0)) + 1
+        best_metric = float(metadata.get("best_metric", best_metric))
+        print(f"Loaded checkpoint from {checkpoint_path} (episode {start_episode - 1}).")
     print("Training started...")
-    for i_episode in range(1, n_episodes + 1):
+    for i_episode in range(start_episode, n_episodes + 1):
         states = []
         hiddens = []
         dones = [False] * n_envs
@@ -162,8 +186,18 @@ def run(config: dict):
             train_returns[i].append(ep_ret)
             scores_window[i].append(ep_ret)
             train_mean_returns[i].append(np.mean(scores_window[i]))
+            writer.add_scalar(f"train/episode_return_env{i}", ep_ret, i_episode)
+            writer.add_scalar(
+                f"train/avg100_return_env{i}",
+                float(np.mean(scores_window[i])),
+                i_episode,
+            )
 
         eps = max(epsilon_final, epsilon_decay * eps)
+        writer.add_scalar("train/epsilon", eps, i_episode)
+        writer.add_scalar("train/lr", agent.last_lr, i_episode)
+        if agent.last_loss is not None:
+            writer.add_scalar("train/loss", agent.last_loss, i_episode)
         env_stats = " | ".join(
             f"Env{i}: {np.mean(scores_window[i]):.2f}"
             for i in range(n_envs)
@@ -176,6 +210,7 @@ def run(config: dict):
         )
 
         if i_episode % evaluation_episodes == 0:
+            eval_means = []
             for i, env in enumerate(envs):
                 eval_list = []
                 for _ in range(5):
@@ -192,7 +227,12 @@ def run(config: dict):
                         if done or truncated:
                             break
                     eval_list.append(total)
-                env_eval_returns[i].append(float(np.mean(eval_list)))
+                eval_mean = float(np.mean(eval_list))
+                eval_var = float(np.var(eval_list))
+                env_eval_returns[i].append(eval_mean)
+                eval_means.append(eval_mean)
+                writer.add_scalar(f"eval/env{i}_mean", eval_mean, i_episode)
+                writer.add_scalar(f"eval/env{i}_var", eval_var, i_episode)
                 
             for i, env in enumerate(test_envs):
                 eval_list = []
@@ -211,7 +251,24 @@ def run(config: dict):
                         if done or truncated:
                             break
                     eval_list.append(total)
-                test_eval_returns[i].append(np.mean(eval_list))
+                test_mean = float(np.mean(eval_list))
+                test_var = float(np.var(eval_list))
+                test_eval_returns[i].append(test_mean)
+                writer.add_scalar(f"eval_test/env{i}_mean", test_mean, i_episode)
+                writer.add_scalar(f"eval_test/env{i}_var", test_var, i_episode)
+            if eval_means:
+                eval_mean_over_envs = float(np.mean(eval_means))
+                writer.add_scalar("eval/mean_over_envs", eval_mean_over_envs, i_episode)
+                if save_best and eval_mean_over_envs > best_metric:
+                    best_metric = eval_mean_over_envs
+                    agent.save_checkpoint(
+                        best_path,
+                        metadata={
+                            "episode": i_episode,
+                            "epsilon": eps,
+                            "best_metric": best_metric,
+                        },
+                    )
         # --- clean newline every 100 eps ---
         if i_episode % 100 == 0:
             print("\n" + "-" * 90)
@@ -224,6 +281,17 @@ def run(config: dict):
 
             for i in range(n_test_envs):
                 print(f"  TestEnv{i}: Test Eval={test_eval_returns[i][-1]:.2f}")
+        if save_freq > 0 and i_episode % save_freq == 0:
+            agent.save_checkpoint(
+                checkpoint_path,
+                metadata={
+                    "episode": i_episode,
+                    "epsilon": eps,
+                    "best_metric": best_metric,
+                },
+            )
+        writer.flush()
+    writer.close()
 
 
 if __name__ == "__main__":

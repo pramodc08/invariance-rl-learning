@@ -7,7 +7,7 @@ import torch.optim as optim
 
 # Import your previously created modules
 # Assuming they are named 'networks' and 'replay_buffers'
-from model import DeepQNetwork, RecurrentDeepQNetwork
+from model import DeepQNetwork, RecurrentDeepQNetwork, DuelingDeepQNetwork
 from buffers import ReplayBuffer, HiddenStateReplayBuffer
 
 class Agent:
@@ -48,6 +48,8 @@ class Agent:
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
         self.t_step = 0
         self.total_steps = 0
+        self.last_loss = None
+        self.last_lr = lr
 
     def step(self, state, action, reward, next_state, done, hidden=None, next_hidden=None):
         """
@@ -125,6 +127,7 @@ class Agent:
 
         # ------------------- Compute Expected Q ------------------- #
         # We perform multiple epochs of updates on the sampled batch (optional, often 1 is standard)
+        loss_values = []
         for _ in range(self.n_epochs):
             if self.recurrent:
                 # Forward pass with the STORED hidden state from the buffer
@@ -145,6 +148,10 @@ class Agent:
             if self.lr_decay is not None and self.lr_decay != 1.0:
                 for param_group in self.optimizer.param_groups:
                     param_group["lr"] *= self.lr_decay
+            loss_values.append(loss.item())
+        if loss_values:
+            self.last_loss = float(np.mean(loss_values))
+            self.last_lr = float(self.optimizer.param_groups[0]["lr"])
 
         # ------------------- Update Target Network ------------------- #
         self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
@@ -156,7 +163,7 @@ class Agent:
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
             target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
 
-    def save_checkpoint(self, path):
+    def save_checkpoint(self, path, metadata=None):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {
@@ -175,6 +182,8 @@ class Agent:
             "clip_grad": self.clip_grad,
             "lr_decay": self.lr_decay,
         }
+        if metadata:
+            checkpoint["metadata"] = metadata
         torch.save(checkpoint, path)
 
     def load_checkpoint(self, path, strict=True):
@@ -189,4 +198,5 @@ class Agent:
         self.steps_before_learning = checkpoint.get("steps_before_learning", self.steps_before_learning)
         self.clip_grad = checkpoint.get("clip_grad", self.clip_grad)
         self.lr_decay = checkpoint.get("lr_decay", self.lr_decay)
+        return checkpoint.get("metadata", {})
 

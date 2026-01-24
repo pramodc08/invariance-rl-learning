@@ -33,6 +33,24 @@ default="model"
 help="Output directory for model."
 type="str"
 
+[RUN.restart]
+key="--restart"
+default=false
+help="Restart Training from first epoch."
+type="bool"
+
+[RUN.save_freq]
+key="--save-freq"
+default=10
+help="Checkpoint model during Training."
+type="int"
+
+[RUN.save_best]
+key="--save-best"
+default=false
+help="save best model during Training."
+type="bool"
+
 [RUN.save_frames]
 key="--save-frames"
 default=false

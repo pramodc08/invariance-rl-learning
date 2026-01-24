@@ -8,24 +8,78 @@ def init_weights(m):
     Applies Orthogonal Initialization to Linear layers.
     Helps prevents vanishing/exploding gradients in Deep/Recurrent networks.
     """
+    # 1) Linear Layers
     if isinstance(m, nn.Linear):
+        # Using gain for ReLU/GELU (approx sqrt(2))
         nn.init.orthogonal_(m.weight, gain=nn.init.calculate_gain('relu'))
         if m.bias is not None:
             nn.init.constant_(m.bias, 0.0)
-    # Optional: Initialize LSTM weights if needed
-    if isinstance(m, nn.LSTM):
+
+    # 2) LayerNorm Layers
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.constant_(m.weight, 1.0)
+        nn.init.constant_(m.bias, 0.0)
+
+    # 3) LSTM Layers
+    elif isinstance(m, nn.LSTM):
         for name, param in m.named_parameters():
             if 'weight_ih' in name:
                 nn.init.orthogonal_(param.data)
             elif 'weight_hh' in name:
+                # Orthogonal is critical for the hidden-to-hidden weights 
+                # to prevent vanishing gradients over long sequences
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 nn.init.constant_(param.data, 0.0)
+                # Forget gate bias trick: setting it to 1.0 can help memory 
+                # flow better at the start of training.
+                n = param.size(0)
+                param.data[n//4:n//2].fill_(1.0)
 
 
 class DeepQNetwork(nn.Module):
+    def __init__(self, input_dims: int, n_actions: int, device, network_hidden_layers=(128, 64)):
+        super().__init__()
+        self.input_dims = input_dims
+        self.n_actions = n_actions
+        self.device = device
+
+        dims = [input_dims] + list(network_hidden_layers)
+        
+        # Build Layers and Norms
+        self.fcs = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        
+        for i in range(len(dims) - 1):
+            self.fcs.append(nn.Linear(dims[i], dims[i+1]))
+            self.norms.append(nn.LayerNorm(dims[i+1]))
+
+        # Final Output Layer (No Norm/GELU on the final Q-values)
+        self.output = nn.Linear(dims[-1], n_actions)
+
+        self.apply(init_weights)
+        self.to(self.device)
+
+    def forward(self, state):
+        x = state
+        for layer, norm in zip(self.fcs, self.norms):
+            x = layer(x)
+            x = norm(x)
+            x = F.gelu(x)  # Switched to GELU
+        
+        q = self.output(x)
+        return q
+    
+    def init_hidden(self, *args, **kwargs):
+        """
+        dummy function
+        """
+        return None
+    
+class DuelingDeepQNetwork(nn.Module):
     """
-    Vanilla MLP (Feed-Forward) DQN.
+    Dueling MLP DQN:
+      shared MLP trunk -> (Value head, Advantage head) -> Q(s,a)
     """
     def __init__(self, input_dims: int, n_actions: int, device, network_hidden_layers=(128, 64)):
         super().__init__()
@@ -33,26 +87,41 @@ class DeepQNetwork(nn.Module):
         self.n_actions = n_actions
         self.device = device
 
-        dims = [input_dims] + list(network_hidden_layers) + [n_actions]
+        # Shared trunk: input -> hidden layers
+        dims = [input_dims] + list(network_hidden_layers)
+        self.trunk = nn.ModuleList()
+        self.trunk_norms = nn.ModuleList()
 
-        self.fcs = nn.ModuleList(
-            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
-        )
+        for i in range(len(dims) - 1):
+            self.trunk.append(nn.Linear(dims[i], dims[i+1]))
+            self.trunk_norms.append(nn.LayerNorm(dims[i+1]))
+
+        last_dim = dims[-1]
+
+        # Value stream V(s)
+        self.value = nn.Linear(last_dim, 1)
+
+        # Advantage stream A(s,a)
+        self.advantage = nn.Linear(last_dim, n_actions)
 
         self.apply(init_weights)
         self.to(self.device)
 
     def forward(self, state):
         x = state
-        for layer in self.fcs[:-1]:
-            x = F.relu(layer(x))
-        q = self.fcs[-1](x)
+        for layer, norm in zip(self.trunk, self.trunk_norms):
+            x = layer(x)
+            x = norm(x)
+            x = F.gelu(x)
+
+        v = self.value(x)
+        a = self.advantage(x)
+
+        # Q(s,a) = V(s) + (A(s,a) - mean_a A(s,a))
+        q = v + (a - a.mean(dim=1, keepdim=True))
         return q
-    
+
     def init_hidden(self, *args, **kwargs):
-        """
-        dummy function
-        """
         return None
 
 
@@ -85,6 +154,7 @@ class RecurrentDeepQNetwork(nn.Module):
 
         # 1) Encoder (single layer as per "one encoder")
         self.encoder = nn.Linear(self.input_dims, encoder_dim)
+        self.encoder_ln = nn.LayerNorm(encoder_dim)
 
         # 2) LSTM core
         self.lstm = nn.LSTM(
@@ -97,23 +167,27 @@ class RecurrentDeepQNetwork(nn.Module):
         # 3) Head MLP (0..N layers) then output
         dims = [self.hidden_size] + head_dims + [self.n_actions]
         self.head = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
+        self.head_lns = nn.ModuleList([nn.LayerNorm(dims[i+1]) for i in range(len(dims) - 2)])
 
         self.apply(init_weights)
         self.to(self.device)
 
     def forward(self, state, hidden=None):
         # state: (B, input_dims)
-        x = F.relu(self.encoder(state))     # (B, encoder_dim)
+        x = self.encoder(state)     # (B, encoder_dim)
+        x = self.encoder_ln(x)
+        x = F.gelu(x)
 
         x = x.unsqueeze(1)                  # (B, 1, encoder_dim)
         lstm_out, new_hidden = self.lstm(x, hidden)
         x = lstm_out.squeeze(1)             # (B, hidden_size)
 
         # head MLP
-        for layer in self.head[:-1]:
-            x = F.relu(layer(x))
+        for i, layer in enumerate(self.head[:-1]):
+            x = layer(x)
+            x = self.head_lns[i](x)
+            x = F.relu(x)
         q = self.head[-1](x)                # (B, n_actions)
-
         return q, new_hidden
 
     def init_hidden(self, batch_size):
