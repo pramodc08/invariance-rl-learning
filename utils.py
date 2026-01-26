@@ -95,7 +95,7 @@ def argparse_generator(config_file_path=None, config_parse_path=None):
 
     return new_args
 
-def set_seed(seed, num_threads=4):
+def set_seed(seed, num_threads=2):
     # NumPy
     np.random.seed(seed)
     # PyTorch

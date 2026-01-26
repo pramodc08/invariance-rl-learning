@@ -7,7 +7,7 @@ save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Lunar-lander-DoubleDQN"
+title = "Lunar-lander-DoubleDQN-Power19.0-0.4"
 
 [AGENT]
 device = "cpu"
@@ -32,8 +32,8 @@ gravity = -10.0
 enable_wind = false
 wind_power = 15.0
 turbulence_power = 1.5
-main_engine_power = 13.0
-side_engine_power = 0.6
+main_engine_power = 19.0
+side_engine_power = 0.4
 wrapper_class = "none"
 wrapper_scale = [1.0]
 wrapper_noise_level = [0.001]
