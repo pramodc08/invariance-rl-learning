@@ -24,9 +24,14 @@ class ExplicitStaticLunarLanderObsWrapper(ObservationWrapper):
         return self.observation(obs), reward, terminated, truncated, info
 
     def observation(self, obs):
-        aux = np.array([obs[0], obs[1], obs[4]], dtype=np.float64) * self.scale
+        clean_obs = obs.copy()
+        aux = np.array([clean_obs[0], clean_obs[1], clean_obs[4]], dtype=np.float64) * self.scale 
+        
         if self.noise_level > 0:
-            obs = obs + np.random.normal(0.0, self.noise_level, size=obs.shape)
+            noise = np.random.normal(0.0, self.noise_level, size=self.n_aux)
+            obs = obs.copy()
+            obs[[0, 1, 4]] += noise
+            
         return np.concatenate([obs, aux]).astype(np.float64)
 
 

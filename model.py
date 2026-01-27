@@ -38,90 +38,74 @@ def init_weights(m):
 
 
 class DeepQNetwork(nn.Module):
-    def __init__(self, input_dims: int, n_actions: int, device, network_hidden_layers=(128, 64)):
+    def __init__(
+        self, 
+        input_dims: int, 
+        n_actions: int, 
+        n_envs: int, 
+        n_reward_steps: int, 
+        device, 
+        network_hidden_layers=(256, 128, 64) # Slightly wider is better for MTL
+    ):
         super().__init__()
-        self.input_dims = input_dims
-        self.n_actions = n_actions
         self.device = device
 
-        dims = [input_dims] + list(network_hidden_layers)
-        
-        # Build Layers and Norms
-        self.fcs = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        
-        for i in range(len(dims) - 1):
-            self.fcs.append(nn.Linear(dims[i], dims[i+1]))
-            self.norms.append(nn.LayerNorm(dims[i+1]))
+        self.input_dims = input_dims
+        self.n_actions = n_actions
+        self.n_envs = n_envs
+        self.n_reward_steps = n_reward_steps
 
-        # Final Output Layer (No Norm/GELU on the final Q-values)
-        self.output = nn.Linear(dims[-1], n_actions)
+        layers = []
+        in_dim = input_dims
+        for hidden_dim in network_hidden_layers:
+            layers.append(nn.Linear(in_dim, hidden_dim))
+            layers.append(nn.LayerNorm(hidden_dim))
+            layers.append(nn.GELU())
+            in_dim = hidden_dim
+        
+        self.feature_extractor = nn.Sequential(*layers)
+        self.encoding_dim = network_hidden_layers[-1]
+
+        self.q_head = nn.Sequential(
+            nn.Linear(self.encoding_dim, network_hidden_layers[-1]),
+            nn.GELU(),
+            nn.Linear(network_hidden_layers[-1], n_actions)
+        )
+        
+        # Classifier Tower
+        self.env_classifier = nn.Sequential(
+            nn.Linear(self.encoding_dim, network_hidden_layers[-1]),
+            nn.GELU(),
+            nn.Linear(network_hidden_layers[-1], n_envs)
+        )
+        
+        reward_input_dim = self.encoding_dim + (n_reward_steps * n_actions)
+        # Reward Predictor Tower
+        self.reward_predictor = nn.Sequential(
+            nn.Linear(reward_input_dim, network_hidden_layers[-1]),
+            nn.GELU(),
+            nn.Linear(network_hidden_layers[-1], n_reward_steps)
+        )
 
         self.apply(init_weights)
         self.to(self.device)
 
-    def forward(self, state):
+    def forward(self, state, actions):
         x = state
-        for layer, norm in zip(self.fcs, self.norms):
-            x = layer(x)
-            x = norm(x)
-            x = F.gelu(x)  # Switched to GELU
-        
-        q = self.output(x)
-        return q
+        encoding = self.feature_extractor(x)
+        q_values = self.q_head(encoding)
+        env_logits = self.env_classifier(encoding)
+
+        ohe_actions = F.one_hot(actions, num_classes=self.n_actions).float()
+        act_flat = ohe_actions.view(ohe_actions.size(0), -1)
+        combined_input = torch.cat([encoding, act_flat], dim=1)
+        predicted_rewards = self.reward_predictor(combined_input)
+        return (q_values, env_logits, predicted_rewards, encoding)
     
     def init_hidden(self, *args, **kwargs):
         """
         dummy function
         """
-        return None
-    
-class DuelingDeepQNetwork(nn.Module):
-    """
-    Dueling MLP DQN:
-      shared MLP trunk -> (Value head, Advantage head) -> Q(s,a)
-    """
-    def __init__(self, input_dims: int, n_actions: int, device, network_hidden_layers=(128, 64)):
-        super().__init__()
-        self.input_dims = input_dims
-        self.n_actions = n_actions
-        self.device = device
-
-        # Shared trunk: input -> hidden layers
-        dims = [input_dims] + list(network_hidden_layers)
-        self.trunk = nn.ModuleList()
-        self.trunk_norms = nn.ModuleList()
-
-        for i in range(len(dims) - 1):
-            self.trunk.append(nn.Linear(dims[i], dims[i+1]))
-            self.trunk_norms.append(nn.LayerNorm(dims[i+1]))
-
-        last_dim = dims[-1]
-
-        # Value stream V(s)
-        self.value = nn.Linear(last_dim, 1)
-
-        # Advantage stream A(s,a)
-        self.advantage = nn.Linear(last_dim, n_actions)
-
-        self.apply(init_weights)
-        self.to(self.device)
-
-    def forward(self, state):
-        x = state
-        for layer, norm in zip(self.trunk, self.trunk_norms):
-            x = layer(x)
-            x = norm(x)
-            x = F.gelu(x)
-
-        v = self.value(x)
-        a = self.advantage(x)
-
-        # Q(s,a) = V(s) + (A(s,a) - mean_a A(s,a))
-        q = v + (a - a.mean(dim=1, keepdim=True))
-        return q
-
-    def init_hidden(self, *args, **kwargs):
         return None
 
 
@@ -133,28 +117,42 @@ class RecurrentDeepQNetwork(nn.Module):
       h1 -> LSTM hidden size
       h2.. -> head MLP dims (optional)
     """
-    def __init__(self, input_dims, n_actions, device, network_hidden_layers, num_layers=1):
+    def __init__(
+        self, 
+        input_dims: int, 
+        n_actions: int, 
+        n_envs: int,            # New: for classifier
+        n_reward_steps: int,    # New: for reward prediction
+        device, 
+        network_hidden_layers=(256, 128, 64), 
+        num_layers=1
+    ):
         super().__init__()
+        self.device = device
+
         self.input_dims = input_dims
         self.n_actions = n_actions
-        self.device = device
+        self.n_envs = n_envs
+        self.n_reward_steps = n_reward_steps
+        
         self.num_layers = num_layers
-
-        if not isinstance(network_hidden_layers, (list, tuple)) or len(network_hidden_layers) < 1:
-            raise ValueError("network_hidden_layers must be a list/tuple with at least 1 element")
+        if not isinstance(network_hidden_layers, (list, tuple)) or len(network_hidden_layers) < 2:
+            raise ValueError("network_hidden_layers must be len >= 2 (e.g., [enc_dim, lstm_dim, tower_dim...])")
 
         # --- Parse config list without adding any new config fields ---
         h = list(network_hidden_layers)
-
         encoder_dim = int(h[0])
-        lstm_hidden = int(h[1]) if len(h) >= 2 else int(h[0])   # fallback if only one provided
-        head_dims = [int(x) for x in h[2:]]                     # may be empty
+        lstm_hidden_dim = int(h[1])
+        tower_hidden_dims = [int(x) for x in h[2:]] # Can be empty if direct readout is desired
 
-        self.hidden_size = lstm_hidden
+        self.hidden_size = lstm_hidden_dim
 
         # 1) Encoder (single layer as per "one encoder")
-        self.encoder = nn.Linear(self.input_dims, encoder_dim)
-        self.encoder_ln = nn.LayerNorm(encoder_dim)
+        self.encoder = nn.Sequential(
+            nn.Linear(self.input_dims, encoder_dim),
+            nn.LayerNorm(encoder_dim),
+            nn.GELU()
+        )
 
         # 2) LSTM core
         self.lstm = nn.LSTM(
@@ -163,32 +161,45 @@ class RecurrentDeepQNetwork(nn.Module):
             num_layers=self.num_layers,
             batch_first=True,
         )
-
-        # 3) Head MLP (0..N layers) then output
-        dims = [self.hidden_size] + head_dims + [self.n_actions]
-        self.head = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
-        self.head_lns = nn.ModuleList([nn.LayerNorm(dims[i+1]) for i in range(len(dims) - 2)])
+        
+        def build_tower(output_dim, in_dim):
+            layers = []
+            
+            # Add config-driven hidden layers
+            for d in tower_hidden_dims:
+                layers.append(nn.Linear(in_dim, d))
+                layers.append(nn.GELU())
+                in_dim = d
+            
+            # Final projection
+            layers.append(nn.Linear(in_dim, output_dim))
+            return nn.Sequential(*layers)
+        
+        self.q_head = build_tower(n_actions, self.hidden_size)
+        self.env_classifier = build_tower(n_envs, self.hidden_size)
+        reward_input_dim = self.hidden_size + (n_reward_steps * n_actions)
+        self.reward_predictor = build_tower(n_reward_steps, reward_input_dim)
 
         self.apply(init_weights)
         self.to(self.device)
 
-    def forward(self, state, hidden=None):
+    def forward(self, state, actions, hidden=None):
         # state: (B, input_dims)
-        x = self.encoder(state)     # (B, encoder_dim)
-        x = self.encoder_ln(x)
-        x = F.gelu(x)
-
-        x = x.unsqueeze(1)                  # (B, 1, encoder_dim)
+        # x: (B, encoder_dim)
+        x = self.encoder(state)
+        x = x.unsqueeze(1) # (B, 1, encoder_dim)
         lstm_out, new_hidden = self.lstm(x, hidden)
-        x = lstm_out.squeeze(1)             # (B, hidden_size)
+        core_features = lstm_out.squeeze(1)
 
-        # head MLP
-        for i, layer in enumerate(self.head[:-1]):
-            x = layer(x)
-            x = self.head_lns[i](x)
-            x = F.relu(x)
-        q = self.head[-1](x)                # (B, n_actions)
-        return q, new_hidden
+        q_values = self.q_head(core_features)
+        env_logits = self.env_classifier(core_features)
+
+        ohe_actions = F.one_hot(actions, num_classes=self.n_actions).float()
+        act_flat = ohe_actions.view(ohe_actions.size(0), -1)
+        combined_input = torch.cat([core_features, act_flat], dim=1)
+        predicted_rewards = self.reward_predictor(combined_input)
+        
+        return (q_values, env_logits, predicted_rewards, core_features), new_hidden
 
     def init_hidden(self, batch_size):
         """

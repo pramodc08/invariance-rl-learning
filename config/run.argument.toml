@@ -157,7 +157,7 @@ type="float"
 
 [AGENT.network_hidden_layers]
 key="--network-hidden-layers"
-default=[128, 64]
+default=[256, 128, 64]
 help="Hidden layers for network."
 type="list"
 
@@ -171,6 +171,12 @@ type="int"
 key="--n-epochs"
 default=5
 help="Epochs for network update"
+type="int"
+
+[AGENT.n_reward_steps]
+key="--n-reward-steps"
+default=3
+help="Number of reward step for auxillary learning"
 type="int"
 
 [ENVIRONMENT]

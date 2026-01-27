@@ -1,18 +1,18 @@
 [RUN]
 seed = 7
-episodes = 5000
+episodes = 10000
 max_steps = 1000
 evaluation_episodes = 20
 save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Lunar-lander-DoubleDQN-Power19.0-0.4"
+title = "Test-Lunar-lander-LSTM-DoubleDQN-Explicit-Seperate-buffer"
 
 [AGENT]
 device = "cpu"
-recurrent = false
-network_hidden_layers = [128, 64]
+recurrent = true
+network_hidden_layers = [64, 64, 64]
 lr = 0.0001
 lr_decay = 1.0
 replay_buffer_size = 50000
@@ -26,16 +26,17 @@ n_epochs = 1
 epsilon_initial = 1.0
 epsilon_final = 0.01
 epsilon_decay = 0.995
+n_reward_steps = 3
 
 [ENVIRONMENT]
 gravity = -10.0
 enable_wind = false
 wind_power = 15.0
 turbulence_power = 1.5
-main_engine_power = 19.0
-side_engine_power = 0.4
-wrapper_class = "none"
-wrapper_scale = [1.0]
-wrapper_noise_level = [0.001]
-wrapper_scale_test = [0.0]
-wrapper_noise_level_test = [0.0]
+main_engine_power = 13.0
+side_engine_power = 0.6
+wrapper_class = "explicit_static"
+wrapper_scale = [1.0, 2.0, 3.0]
+wrapper_noise_level = [0.01, 0.01, 0.01]
+wrapper_scale_test = [-1.0, 0.0, 1.5, 4.0, 10.0]
+wrapper_noise_level_test = [0.0, 0.0, 0.0, 0.0, 0.0]
