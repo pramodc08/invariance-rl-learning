@@ -10,11 +10,137 @@ import torch.optim as optim
 from model import DeepQNetwork, RecurrentDeepQNetwork
 from buffers import ReplayBuffer, HiddenStateReplayBuffer
 
+class _GradReverse(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, scale):
+        ctx.scale = scale
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.scale * grad_output, None
+
+
+def grad_reverse(x, scale):
+    return _GradReverse.apply(x, scale)
+
+
+class RobustLoss(torch.nn.Module):
+    def __init__(self, num_groups, mode='soft_dro', dro_step_size=0.01, group_decay=0.0, device='cuda'):
+        """
+        Args:
+            mode: 'hard_max' (train on worst group) or 'soft_dro' (standard weighted average).
+            dro_step_size: Learning rate for the group weights (eta).
+            group_decay: Regularization pulling weights toward uniform (smoothing).
+        """
+        super().__init__()
+        self.num_groups = num_groups
+        self.mode = mode
+        self.dro_step_size = dro_step_size
+        self.group_decay = group_decay
+        self.device = device
+        
+        # Persistent Group Weights (The "Adversary")
+        self.group_weights = torch.ones(num_groups).to(device) / num_groups
+        
+        # Internal buffer to track raw losses during the loop
+        self.raw_loss_buffer = torch.zeros(num_groups).to(device)
+        self.counts = torch.zeros(num_groups).to(device) # To handle multiple hits per env if needed
+
+    def forward(self, predicted_rewards, true_rewards, env_idx):
+        """
+        Calculates loss for backprop and internally tracks raw loss.
+        Returns ONLY loss_dro.
+        """
+        # 1. Compute Raw Loss (MSE / Smooth L1)
+        raw_loss = F.smooth_l1_loss(predicted_rewards, true_rewards)
+        
+        # 2. Track it internally (detach to stop graph retention)
+        with torch.no_grad():
+            self.raw_loss_buffer[env_idx] += raw_loss.detach()
+            self.counts[env_idx] += 1
+            
+        # 3. Apply Strategy to get Backward-able Loss
+        if self.mode == 'hard_max':
+            # Binary mask: 1 if this is the worst group, 0 otherwise
+            is_worst = (env_idx == torch.argmax(self.group_weights))
+            loss_dro = raw_loss if is_worst else raw_loss * 0.0
+            
+        else: # 'soft_dro'
+            # Standard DRO: weighted loss using current distribution q
+            # Detach weight so we don't backprop into the adversary
+            weight = self.group_weights[env_idx].detach()
+            loss_dro = raw_loss * weight
+
+        return loss_dro
+
+    def update(self):
+        """
+        Updates group weights based on buffered losses, then resets buffer.
+        Call this ONCE after processing all environments.
+        """
+        with torch.no_grad():
+            # Average raw losses if we hit an env multiple times
+            # (Avoid division by zero)
+            avg_raw_losses = self.raw_loss_buffer / (self.counts + 1e-8)
+            
+            if self.mode == 'hard_max':
+                # Hard Max Update: Shift weights towards the max loss group
+                max_idx = torch.argmax(avg_raw_losses)
+                target_weights = torch.zeros_like(self.group_weights)
+                target_weights[max_idx] = 1.0
+                
+                # Smooth update (alpha=0.1) prevents oscillation
+                self.group_weights = 0.9 * self.group_weights + 0.1 * target_weights
+                
+            elif self.mode == 'soft_dro':
+                # 1. Exponentiated Gradient Update: w' = w * exp(eta * loss)
+                self.group_weights *= torch.exp(self.dro_step_size * avg_raw_losses)
+                
+                # 2. Group Decay (Regularization): Pull towards uniform
+                if self.group_decay > 0:
+                    uniform = torch.ones_like(self.group_weights) / self.num_groups
+                    self.group_weights = (1 - self.group_decay) * self.group_weights + \
+                                         (self.group_decay) * uniform
+
+                # 3. Normalize to sum to 1
+                self.group_weights /= self.group_weights.sum()
+
+            # Reset buffers for next step
+            self.raw_loss_buffer.zero_()
+            self.counts.zero_()
+
+
 class Agent:
     def __init__(self, state_size, action_size, device, network_hidden_layers=(256, 128, 64), recurrent=False,
                  lr=1e-4, buffer_size=50000, batch_size=64, gamma=0.99,
                  tau=1e-3, update_every=5, n_epochs=1, steps_before_learning=0,
-                 clip_grad=1.0, lr_decay=1.0, n_envs=3, n_reward_steps=3):
+                 clip_grad=1.0, lr_decay=1.0, n_envs=3, n_reward_steps=3,
+                 weight_decay=0.0,
+                 irm_lambda=0.0, 
+                 dro_lambda=1.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0,
+                 grl_lambda=0.0, grl_alpha=1.0 
+                ):
+        self.weight_decay = weight_decay
+        # IRM-v1
+        self.irm_lambda = float(irm_lambda)
+        # DRO
+        self.dro_lambda = float(dro_lambda)
+        self.dro_step_size = float(dro_step_size)
+        self.dro_group_decay = float(dro_group_decay)
+        self.dro_mode = dro_mode
+        self.dro_loss_fn = RobustLoss(
+            num_groups=n_envs, 
+            mode=dro_mode,       
+            dro_step_size=dro_step_size,
+            group_decay=dro_group_decay,       # Set > 0 for Group Decay comparison
+            device=device
+        )
+        # GRL
+        self.grl_alpha = float(grl_alpha)
+        self.grl_lambda = float(grl_lambda)
+
+
         self.state_size = state_size
         self.action_size = action_size
         self.device = device
@@ -45,7 +171,7 @@ class Agent:
             self.memory = ReplayBuffer(action_size, buffer_size, batch_size, device, n_reward_steps=n_reward_steps)
         
         print(self.qnetwork_local)
-        self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
+        self.optimizer = optim.AdamW(self.qnetwork_local.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=self.weight_decay)
         self.t_step = 0
         self.total_steps = 0
         self.last_loss = None
@@ -248,3 +374,55 @@ def calculate_loss(agent, experiences):
     # Compute loss
     loss = F.smooth_l1_loss(Q_expected, Q_targets)
     return loss, features
+
+
+def calculate_grl_loss(agent, features, experiences):
+    if agent.recurrent:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions, hidden, next_hidden = experiences
+    else:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
+    encoding = features[3]
+    
+    rev_encoding = grad_reverse(encoding, agent.grl_alpha)
+    
+    env_logits = agent.qnetwork_local.env_classifier(rev_encoding)
+    env_loss = F.cross_entropy(env_logits, env_ids)
+
+    return env_loss
+
+
+def calculate_dro_loss(agent, features, experiences, env_index):
+    """
+    Docstring for calculate_dro_loss
+    REquires l2 penalty regularizatio heavily
+    """
+
+    if agent.recurrent:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions, hidden, next_hidden = experiences
+    else:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
+    predicted_rewards = features[2]
+
+    loss_dro = agent.dro_loss_fn(predicted_rewards, f_rewards, env_idx=env_index)
+    
+    return loss_dro
+
+"""
+Why IRM Fails on Standard Q-Loss
+
+    Non-Stationary Targets: In Q-learning, the "label" is the target value (r+γmaxQtarget​). This target changes every time the network updates. IRM tries to find a feature representation that is optimal across environments permanently. If the target keeps moving, the "optimal" representation keeps shifting, and the IRM penalty oscillates wildly.
+
+    Bootstrapping: Q-learning bootstraps (uses its own predictions to update itself). Penalizing the gradient of a bootstrapped loss creates complex second-order effects that usually destroy learning stability.
+
+The Solution: Reward Prediction (Auxiliary Task)
+
+To fix this, researchers typically decouple the invariant feature learning from the policy learning.
+
+    Shared Encoder: You have a feature extractor Φ(s).
+
+    Reward Head: A simple linear layer predicts the immediate reward R(s). This is a stable, supervised regression task (the ground truth reward never changes).
+
+    Q-Head: The standard Q-network uses the same features Φ(s) to estimate returns.
+
+You apply the IRM penalty ONLY to the Reward Head. This forces Φ(s) to learn features that are stable and causal (invariant predictors of reward), which the Q-head then exploits to learn a robust policy.
+"""

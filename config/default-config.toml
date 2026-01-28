@@ -7,11 +7,11 @@ save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Test-Lunar-lander-LSTM-DoubleDQN-Explicit-Seperate-buffer"
+title = "Test-Lunar-lander-DoubleDQN-Explicit-Seperate-buffer-DRO-Max-1.0"
 
 [AGENT]
 device = "cpu"
-recurrent = true
+recurrent = false
 network_hidden_layers = [64, 64, 64]
 lr = 0.0001
 lr_decay = 1.0
@@ -37,6 +37,6 @@ main_engine_power = 13.0
 side_engine_power = 0.6
 wrapper_class = "explicit_static"
 wrapper_scale = [1.0, 2.0, 3.0]
-wrapper_noise_level = [0.01, 0.01, 0.01]
+wrapper_noise_level = [0.001, 0.001, 0.001]
 wrapper_scale_test = [-1.0, 0.0, 1.5, 4.0, 10.0]
 wrapper_noise_level_test = [0.0, 0.0, 0.0, 0.0, 0.0]

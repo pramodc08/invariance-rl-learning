@@ -21,7 +21,7 @@ from wrapper import (
     NonCausalInternalLunarLanderObsWrapper,
 )
 from buffers import HiddenStateReplayBuffer, ReplayBuffer
-from agent import Agent, calculate_loss
+from agent import Agent, calculate_loss, calculate_grl_loss, calculate_dro_loss
 from utils import argparse_generator, set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -236,27 +236,50 @@ def run(config: dict):
                 t_step = (t_step + 1) % agent.update_every
                 if t_step == 0:
                     for _ in range(len(envs)):
-                        loss_values = []
+                        loss_values = {
+                            "q_loss": [],
+                            "grl_loss": [],
+                            "grl_loss_weigthed": [],
+                            "dro_loss": [],
+                            "dro_loss_weigthed": [],
+                            "total_loss": []
+                        }
+                        
                         for _ in range(agent.n_epochs):
-                            epoch_losses = []
+                            q_losses = []
+                            env_losses = []
+                            dro_losses = []
                             for i, env in enumerate(envs):
                                 experience = buffers[i].sample()
                                 loss_i, features = calculate_loss(agent, experience)
-                                epoch_losses.append(loss_i)
+                                loss_env = calculate_grl_loss(agent, features, experience)
+                                loss_dro = calculate_dro_loss(agent, features, experience, i)
+                                q_losses.append(loss_i)
+                                env_losses.append(loss_env)
+                                dro_losses.append(loss_dro)
 
-                            loss = torch.stack(epoch_losses).mean()
+                            q_loss = torch.stack(q_losses).mean() 
+                            grl_loss = torch.stack(env_losses).mean()
+                            dro_loss = torch.stack(dro_losses).mean()
+                            total_loss = q_loss + agent.grl_lambda * grl_loss + agent.dro_lambda * dro_loss
                             agent.optimizer.zero_grad()
-                            loss.backward()
+                            total_loss.backward()
                             if agent.clip_grad is not None and agent.clip_grad > 0:
                                 torch.nn.utils.clip_grad_norm_(agent.qnetwork_local.parameters(), agent.clip_grad)
                             agent.optimizer.step()
-                            loss_values.append(loss.item())
+                            agent.dro_loss_fn.update()
+                            loss_values["q_loss"].append(q_loss.item())
+                            loss_values["grl_loss"].append(grl_loss.item())
+                            loss_values["grl_loss_weigthed"].append(grl_loss.item() * agent.grl_lambda)
+                            loss_values["dro_loss"].append(dro_loss.item())
+                            loss_values["dro_loss_weigthed"].append(dro_loss.item() * agent.dro_lambda)
+                            loss_values["total_loss"].append(total_loss.item())
                         agent.soft_update(agent.qnetwork_local, agent.qnetwork_target, agent.tau)
                         if agent.lr_decay is not None and agent.lr_decay != 1.0:
                             for param_group in agent.optimizer.param_groups:
                                 param_group["lr"] *= agent.lr_decay
                         if loss_values:
-                            agent.last_loss = float(np.mean(loss_values))
+                            agent.last_loss = loss_values
                             agent.last_lr = float(agent.optimizer.param_groups[0]["lr"])  
 
             if all(dones):
@@ -278,8 +301,8 @@ def run(config: dict):
         writer.add_scalar("train/epsilon", eps, i_episode)
         writer.add_scalar("train/lr", agent.last_lr, i_episode)
         if agent.last_loss is not None:
-            writer.add_scalar("train/total-loss", agent.last_loss, i_episode)
-            writer.add_scalar("train/q-loss", agent.last_loss, i_episode)
+            for each_key, value in agent.last_loss.items():
+                writer.add_scalar(f"train/{each_key}", float(np.mean(value)), i_episode)
         env_stats = " | ".join(
             f"Env{i}: {np.mean(scores_window[i]):.2f}"
             for i in range(n_envs)
