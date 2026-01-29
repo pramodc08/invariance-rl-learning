@@ -7,7 +7,7 @@ save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Test-Lunar-lander-DoubleDQN-Explicit-Seperate-buffer-DRO-Max-1.0"
+title = "Explicit-Seperate-buffer-IRM-Test-Default-0.1-Weight-decay-0.0001"
 
 [AGENT]
 device = "cpu"

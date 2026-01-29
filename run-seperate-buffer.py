@@ -21,7 +21,7 @@ from wrapper import (
     NonCausalInternalLunarLanderObsWrapper,
 )
 from buffers import HiddenStateReplayBuffer, ReplayBuffer
-from agent import Agent, calculate_loss, calculate_grl_loss, calculate_dro_loss
+from agent import Agent, calculate_loss, calculate_grl_loss, calculate_dro_loss, calculate_irm_loss
 from utils import argparse_generator, set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -238,10 +238,19 @@ def run(config: dict):
                     for _ in range(len(envs)):
                         loss_values = {
                             "q_loss": [],
+
                             "grl_loss": [],
                             "grl_loss_weigthed": [],
+
                             "dro_loss": [],
                             "dro_loss_weigthed": [],
+
+                            "irm_penalty_loss": [],
+                            "irm_penalty_loss_weigthed": [],
+                            "irm_loss": [],
+                            "irm_total_loss": [],
+                            "irm_total_loss_weigthed": [],
+
                             "total_loss": []
                         }
                         
@@ -249,19 +258,26 @@ def run(config: dict):
                             q_losses = []
                             env_losses = []
                             dro_losses = []
+                            irm_losses = []
+                            irm_penalty_losses = []
                             for i, env in enumerate(envs):
                                 experience = buffers[i].sample()
                                 loss_i, features = calculate_loss(agent, experience)
                                 loss_env = calculate_grl_loss(agent, features, experience)
                                 loss_dro = calculate_dro_loss(agent, features, experience, i)
+                                irm_grad_penalty, loss_irm = calculate_irm_loss(agent, features, experience)
                                 q_losses.append(loss_i)
                                 env_losses.append(loss_env)
                                 dro_losses.append(loss_dro)
+                                irm_losses.append(loss_irm)
+                                irm_penalty_losses.append(irm_grad_penalty)
 
                             q_loss = torch.stack(q_losses).mean() 
                             grl_loss = torch.stack(env_losses).mean()
-                            dro_loss = torch.stack(dro_losses).mean()
-                            total_loss = q_loss + agent.grl_lambda * grl_loss + agent.dro_lambda * dro_loss
+                            dro_loss = torch.stack(dro_losses).sum()
+                            irm_loss = torch.stack(irm_losses).mean()
+                            irm_penalty_loss = torch.stack(irm_penalty_losses).sum()
+                            total_loss = q_loss + agent.grl_lambda * grl_loss + agent.dro_lambda * dro_loss + agent.irm_lambda * (irm_loss + agent.irm_penalty_multiplier * irm_penalty_loss)
                             agent.optimizer.zero_grad()
                             total_loss.backward()
                             if agent.clip_grad is not None and agent.clip_grad > 0:
@@ -269,11 +285,22 @@ def run(config: dict):
                             agent.optimizer.step()
                             agent.dro_loss_fn.update()
                             loss_values["q_loss"].append(q_loss.item())
+                            
                             loss_values["grl_loss"].append(grl_loss.item())
                             loss_values["grl_loss_weigthed"].append(grl_loss.item() * agent.grl_lambda)
+
                             loss_values["dro_loss"].append(dro_loss.item())
                             loss_values["dro_loss_weigthed"].append(dro_loss.item() * agent.dro_lambda)
+
+                            loss_values["irm_penalty_loss"].append(irm_penalty_loss.item())
+                            loss_values["irm_penalty_loss_weigthed"].append(irm_penalty_loss.item() * agent.irm_penalty_multiplier)
+                            loss_values["irm_loss"].append(irm_loss.item())
+                            loss_values["irm_total_loss"].append((irm_loss + irm_penalty_loss * agent.irm_penalty_multiplier).item())
+                            loss_values["irm_total_loss_weigthed"].append((irm_loss + irm_penalty_loss * agent.irm_penalty_multiplier).item() * agent.irm_lambda)
+
                             loss_values["total_loss"].append(total_loss.item())
+
+                        agent.irm_penalty_multiplier = float(min(i_episode, 5000)/5000.0*100.0) ** 1.6
                         agent.soft_update(agent.qnetwork_local, agent.qnetwork_target, agent.tau)
                         if agent.lr_decay is not None and agent.lr_decay != 1.0:
                             for param_group in agent.optimizer.param_groups:
@@ -300,6 +327,7 @@ def run(config: dict):
         eps = max(epsilon_final, epsilon_decay * eps)
         writer.add_scalar("train/epsilon", eps, i_episode)
         writer.add_scalar("train/lr", agent.last_lr, i_episode)
+        writer.add_scalar(f"train/irm_penalty_multiplier", float(agent.irm_penalty_multiplier), i_episode)
         if agent.last_loss is not None:
             for each_key, value in agent.last_loss.items():
                 writer.add_scalar(f"train/{each_key}", float(np.mean(value)), i_episode)
