@@ -116,15 +116,19 @@ class Agent:
                  lr=1e-4, buffer_size=50000, batch_size=64, gamma=0.99,
                  tau=1e-3, update_every=5, n_epochs=1, steps_before_learning=0,
                  clip_grad=1.0, lr_decay=1.0, n_envs=3, n_reward_steps=3,
-                 weight_decay=0.0001,
-                 irm_lambda=1.0, irm_penalty_multiplier=0.1,
+                 weight_decay=0.001,
+                 irm_lambda=0.0, irm_penalty_multiplier=1.0,
                  dro_lambda=0.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0,
-                 grl_lambda=0.0, grl_alpha=1.0 
+                 grl_lambda=0.0, grl_alpha=1.0,
+                 vrex_lambda=1.0, vrex_penalty_multiplier=10.0
                 ):
         self.weight_decay = weight_decay
         # IRM-v1
         self.irm_lambda = float(irm_lambda)
         self.irm_penalty_multiplier = float(irm_penalty_multiplier)
+        # VReX
+        self.vrex_lambda = float(vrex_lambda)
+        self.vrex_penalty_multiplier = float(vrex_penalty_multiplier)
         # DRO
         self.dro_lambda = float(dro_lambda)
         self.dro_step_size = float(dro_step_size)
@@ -446,3 +450,13 @@ def calculate_irm_loss(agent, features, experiences):
     grad_loss = torch.sum(grad ** 2)
 
     return grad_loss, raw_loss.mean()
+
+def calculate_vrex_loss(agent, features, experiences):
+    if agent.recurrent:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions, hidden, next_hidden = experiences
+    else:
+        states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
+
+    predicted_rewards = features[2]
+    raw_loss = F.smooth_l1_loss(predicted_rewards, f_rewards)
+    return raw_loss

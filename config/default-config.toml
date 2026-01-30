@@ -1,13 +1,13 @@
 [RUN]
 seed = 7
-episodes = 10000
+episodes = 2000
 max_steps = 1000
 evaluation_episodes = 20
 save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Explicit-Seperate-buffer-IRM-Test-Default-0.1-Weight-decay-0.0001"
+title = "Explicit-Seperate-buffer-VReX-Test-Default-Weight-decay-0.001"
 
 [AGENT]
 device = "cpu"
