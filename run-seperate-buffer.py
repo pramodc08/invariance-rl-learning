@@ -21,7 +21,7 @@ from wrapper import (
     NonCausalInternalLunarLanderObsWrapper,
 )
 from buffers import HiddenStateReplayBuffer, ReplayBuffer
-from agent import Agent, calculate_loss, calculate_grl_loss, calculate_dro_loss, calculate_irm_loss, calculate_vrex_loss
+from agent import Agent, calculate_q_loss, calculate_grl_loss, calculate_dro_loss, calculate_irm_loss, calculate_vrex_loss
 from utils import argparse_generator, set_seed
 from torch.utils.tensorboard import SummaryWriter
 
@@ -238,83 +238,103 @@ def run(config: dict):
                     for _ in range(len(envs)):
                         loss_values = {
                             "q_loss": [],
+                            "reward_loss": [],
 
                             "grl_loss": [],
                             "grl_loss_weigthed": [],
+                            "grl_loss_total_loss": [],
+                            "grl_loss_total_loss_weigthed": [],
 
                             "dro_loss": [],
                             "dro_loss_weigthed": [],
+                            "dro_loss_total_loss": [],
+                            "dro_loss_total_loss_weigthed": [],
 
-                            "irm_penalty_loss": [],
-                            "irm_penalty_loss_weigthed": [],
                             "irm_loss": [],
+                            "irm_weigthed": [],
                             "irm_total_loss": [],
                             "irm_total_loss_weigthed": [],
 
-                            "vrex_penalty_loss": [],
-                            "vrex_total_loss_weigthed": [],
                             "vrex_loss": [],
+                            "vrex_weigthed": [],
                             "vrex_total_loss": [],
-                           "vrex_total_loss_weigthed": [],
+                            "vrex_total_loss_weigthed": [],
 
+                            "aux_loss": [],
                             "total_loss": []
                         }
                         
                         for _ in range(agent.n_epochs):
+                            # --- Phase 1: Q-Learning ---
                             q_losses = []
-                            env_losses = []
+                            # --- Phase 2: Auxiliary Tasks ---
+                            reward_prediction_losses = []
+                            grl_losses = []
                             dro_losses = []
                             irm_losses = []
-                            irm_penalty_losses = []
                             vrex_losses = []
+                            
                             for i, env in enumerate(envs):
                                 experience = buffers[i].sample()
-                                loss_i, features = calculate_loss(agent, experience)
-                                loss_env = calculate_grl_loss(agent, features, experience)
-                                loss_dro = calculate_dro_loss(agent, features, experience, i)
-                                irm_grad_penalty, loss_irm = calculate_irm_loss(agent, features, experience)
-                                loss_vrex = calculate_vrex_loss(agent, features, experience)
+                                loss_i, features = calculate_q_loss(agent, experience)
+                                grl_loss, _ = calculate_grl_loss(agent, features, experience)
+                                dro_loss, _ = calculate_dro_loss(agent, features, experience, i)
+                                irm_loss, _ = calculate_irm_loss(agent, features, experience)
+                                vrex_loss = calculate_vrex_loss(agent, features, experience)
+                                
                                 q_losses.append(loss_i)
-                                env_losses.append(loss_env)
-                                dro_losses.append(loss_dro)
-                                irm_losses.append(loss_irm)
-                                irm_penalty_losses.append(irm_grad_penalty)
-                                vrex_losses.append(loss_vrex)
-                            q_loss = torch.stack(q_losses).mean() 
-                            grl_loss = torch.stack(env_losses).mean()
+                                grl_losses.append(grl_loss)
+                                dro_losses.append(dro_loss)
+                                irm_losses.append(irm_loss)
+                                vrex_losses.append(vrex_loss)
+                                reward_prediction_losses.append(vrex_loss)
+
+                            grl_loss = torch.stack(grl_losses).mean()
                             dro_loss = torch.stack(dro_losses).sum()
-                            irm_loss = torch.stack(irm_losses).mean()
-                            irm_penalty_loss = torch.stack(irm_penalty_losses).sum()
-                            vrex_loss = torch.stack(vrex_losses).mean()
-                            vrex_penalty_loss = torch.var(torch.stack(vrex_losses))
+                            irm_loss = torch.stack(irm_losses).sum()
+                            vrex_loss = torch.var(torch.stack(vrex_losses))
+                            reward_prediction_loss = torch.stack(reward_prediction_losses).mean()
                             
-                            total_loss = q_loss + agent.grl_lambda * grl_loss + agent.dro_lambda * dro_loss + agent.irm_lambda * (irm_loss + agent.irm_penalty_multiplier * irm_penalty_loss) + agent.vrex_lambda * (vrex_loss + agent.vrex_penalty_multiplier * vrex_penalty_loss)
+                            q_loss = torch.stack(q_losses).mean()
+                            aux_loss = agent.grl_lambda * (reward_prediction_loss + agent.grl_weight * grl_loss) + \
+                                       agent.dro_lambda * (reward_prediction_loss + agent.dro_weight * dro_loss) + \
+                                       agent.irm_lambda * (reward_prediction_loss + agent.irm_penalty_multiplier * irm_loss) + \
+                                       agent.vrex_lambda * (reward_prediction_loss + agent.vrex_penalty_multiplier * vrex_loss)
+                            total_loss = q_loss + aux_loss
                             agent.optimizer.zero_grad()
                             total_loss.backward()
                             if agent.clip_grad is not None and agent.clip_grad > 0:
                                 torch.nn.utils.clip_grad_norm_(agent.qnetwork_local.parameters(), agent.clip_grad)
                             agent.optimizer.step()
+
                             agent.dro_loss_fn.update()
+                            
+                            # --- Logging ---
                             loss_values["q_loss"].append(q_loss.item())
+                            loss_values["reward_prediction_loss"].append(reward_prediction_loss.item())
                             
                             loss_values["grl_loss"].append(grl_loss.item())
-                            loss_values["grl_loss_weigthed"].append(grl_loss.item() * agent.grl_lambda)
+                            loss_values["grl_loss_weigthed"].append(grl_loss.item() * agent.grl_weight)
+                            loss_values["grl_loss_total_loss"].append((reward_prediction_loss + agent.grl_weight * grl_loss).item())
+                            loss_values["grl_loss_total_loss_weigthed"].append((reward_prediction_loss + agent.grl_weight * grl_loss).item() * agent.grl_lambda)
 
                             loss_values["dro_loss"].append(dro_loss.item())
                             loss_values["dro_loss_weigthed"].append(dro_loss.item() * agent.dro_lambda)
+                            loss_values["dro_loss_total_loss"].append((reward_prediction_loss + agent.dro_weight * dro_loss).item())
+                            loss_values["dro_loss_total_loss_weigthed"].append((reward_prediction_loss + agent.dro_weight * dro_loss).item() * agent.dro_lambda)
 
-                            loss_values["irm_penalty_loss"].append(irm_penalty_loss.item())
-                            loss_values["irm_penalty_loss_weigthed"].append(irm_penalty_loss.item() * agent.irm_penalty_multiplier)
                             loss_values["irm_loss"].append(irm_loss.item())
-                            loss_values["irm_total_loss"].append((irm_loss + irm_penalty_loss * agent.irm_penalty_multiplier).item())
-                            loss_values["irm_total_loss_weigthed"].append((irm_loss + irm_penalty_loss * agent.irm_penalty_multiplier).item() * agent.irm_lambda)
+                            loss_values["irm_weigthed"].append(irm_loss.item() * agent.irm_penalty_multiplier)
+                            loss_values["irm_total_loss"].append((reward_prediction_loss + agent.irm_penalty_multiplier * irm_loss).item())
+                            loss_values["irm_total_loss_weigthed"].append((reward_prediction_loss + agent.irm_penalty_multiplier * irm_loss).item() * agent.irm_lambda)
 
                             loss_values["vrex_loss"].append(vrex_loss.item())
-                            loss_values["vrex_penalty_loss"].append(vrex_penalty_loss.item())
-                            loss_values["vrex_total_loss"].append((vrex_loss + agent.vrex_penalty_multiplier * vrex_penalty_loss).item())
-                            loss_values["vrex_total_loss_weigthed"].append((vrex_loss + agent.vrex_penalty_multiplier * vrex_penalty_loss).item() * agent.vrex_lambda)
+                            loss_values["vrex_weigthed"].append(vrex_loss.item() * agent.vrex_penalty_multiplier)
+                            loss_values["vrex_total_loss"].append((reward_prediction_loss + agent.vrex_penalty_multiplier * vrex_loss).item())
+                            loss_values["vrex_total_loss_weigthed"].append((reward_prediction_loss + agent.vrex_penalty_multiplier * vrex_loss).item() * agent.vrex_lambda)
                             
-                            loss_values["total_loss"].append(total_loss.item())
+                            loss_values["aux_loss"].append((aux_loss).item())
+                            loss_values["total_loss"].append((total_loss).item())
 
                         agent.irm_penalty_multiplier = float(min(i_episode, 1500)/1500.0*100.0) ** 1.6
                         agent.vrex_penalty_multiplier = float(min(i_episode, 1500)/1500.0*100.0) ** 1.6

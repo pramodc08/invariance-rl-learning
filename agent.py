@@ -116,10 +116,10 @@ class Agent:
                  lr=1e-4, buffer_size=50000, batch_size=64, gamma=0.99,
                  tau=1e-3, update_every=5, n_epochs=1, steps_before_learning=0,
                  clip_grad=1.0, lr_decay=1.0, n_envs=3, n_reward_steps=3,
-                 weight_decay=0.001,
+                 weight_decay=0.0001,
                  irm_lambda=0.0, irm_penalty_multiplier=1.0,
-                 dro_lambda=0.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0,
-                 grl_lambda=0.0, grl_alpha=1.0,
+                 dro_lambda=0.0, dro_weight=1.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0, 
+                 grl_lambda=0.0, grl_weight=1.0, grl_alpha=1.0,
                  vrex_lambda=1.0, vrex_penalty_multiplier=10.0
                 ):
         self.weight_decay = weight_decay
@@ -131,6 +131,7 @@ class Agent:
         self.vrex_penalty_multiplier = float(vrex_penalty_multiplier)
         # DRO
         self.dro_lambda = float(dro_lambda)
+        self.dro_weight = float(dro_weight)
         self.dro_step_size = float(dro_step_size)
         self.dro_group_decay = float(dro_group_decay)
         self.dro_mode = dro_mode
@@ -144,7 +145,7 @@ class Agent:
         # GRL
         self.grl_alpha = float(grl_alpha)
         self.grl_lambda = float(grl_lambda)
-
+        self.grl_weight = float(grl_weight)
 
         self.state_size = state_size
         self.action_size = action_size
@@ -177,6 +178,7 @@ class Agent:
         
         print(self.qnetwork_local)
         self.optimizer = optim.AdamW(self.qnetwork_local.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=self.weight_decay)
+        self.optimizer_aux = optim.AdamW(self.qnetwork_local.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=self.weight_decay)
         self.t_step = 0
         self.total_steps = 0
         self.last_loss = None
@@ -318,6 +320,7 @@ class Agent:
             "steps_before_learning": self.steps_before_learning,
             "clip_grad": self.clip_grad,
             "lr_decay": self.lr_decay,
+            "optimizer_aux": self.optimizer_aux.state_dict(),
         }
         if metadata:
             checkpoint["metadata"] = metadata
@@ -330,6 +333,8 @@ class Agent:
         self.qnetwork_target.load_state_dict(target_state, strict=strict)
         if "optimizer" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
+        if "optimizer_aux" in checkpoint:
+            self.optimizer_aux.load_state_dict(checkpoint["optimizer_aux"])
         self.t_step = checkpoint.get("t_step", 0)
         self.total_steps = checkpoint.get("total_steps", 0)
         self.steps_before_learning = checkpoint.get("steps_before_learning", self.steps_before_learning)
@@ -338,7 +343,7 @@ class Agent:
         return checkpoint.get("metadata", {})
 
 
-def calculate_loss(agent, experiences):
+def calculate_q_loss(agent, experiences):
     """Update value parameters using given batch of experience tuples."""
     if agent.recurrent:
         states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions, hidden, next_hidden = experiences
@@ -388,12 +393,14 @@ def calculate_grl_loss(agent, features, experiences):
         states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
     encoding = features[3]
     
-    rev_encoding = grad_reverse(encoding, agent.grl_alpha)
-    
-    env_logits = agent.qnetwork_local.env_classifier(rev_encoding)
-    env_loss = F.cross_entropy(env_logits, env_ids)
+    predicted_rewards = features[2]
+    raw_loss = F.smooth_l1_loss(predicted_rewards, f_rewards, reduction="none").mean()
 
-    return env_loss
+    rev_encoding = grad_reverse(encoding, agent.grl_alpha)
+    env_logits = agent.qnetwork_local.env_classifier(rev_encoding)
+    grl_loss = F.cross_entropy(env_logits, env_ids)
+
+    return grl_loss, raw_loss
 
 
 def calculate_dro_loss(agent, features, experiences, env_index):
@@ -408,9 +415,10 @@ def calculate_dro_loss(agent, features, experiences, env_index):
         states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
     predicted_rewards = features[2]
 
+    raw_loss = F.smooth_l1_loss(predicted_rewards, f_rewards, reduction="none").mean()
     loss_dro = agent.dro_loss_fn(predicted_rewards, f_rewards, env_idx=env_index)
     
-    return loss_dro
+    return loss_dro, raw_loss
 
 """
 Why IRM Fails on Standard Q-Loss
