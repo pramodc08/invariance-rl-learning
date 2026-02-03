@@ -45,7 +45,7 @@ class DeepQNetwork(nn.Module):
         n_envs: int, 
         n_reward_steps: int, 
         device, 
-        network_hidden_layers=(256, 128, 64) # Slightly wider is better for MTL
+        network_hidden_layers=(256, 128, 64), # Slightly wider is better for MTL
     ):
         super().__init__()
         self.device = device
@@ -67,24 +67,24 @@ class DeepQNetwork(nn.Module):
         self.encoding_dim = network_hidden_layers[-1]
 
         self.q_head = nn.Sequential(
-            nn.Linear(self.encoding_dim, network_hidden_layers[-1]),
+            nn.Linear(self.encoding_dim, self.encoding_dim),
             nn.GELU(),
-            nn.Linear(network_hidden_layers[-1], n_actions)
+            nn.Linear(self.encoding_dim, n_actions)
         )
         
         # Classifier Tower
         self.env_classifier = nn.Sequential(
-            nn.Linear(self.encoding_dim, network_hidden_layers[-1]),
+            nn.Linear(self.encoding_dim, self.encoding_dim),
             nn.GELU(),
-            nn.Linear(network_hidden_layers[-1], n_envs)
+            nn.Linear(self.encoding_dim, n_envs)
         )
         
         reward_input_dim = self.encoding_dim + (n_reward_steps * n_actions)
         # Reward Predictor Tower
         self.reward_predictor = nn.Sequential(
-            nn.Linear(reward_input_dim, network_hidden_layers[-1]),
+            nn.Linear(reward_input_dim, self.encoding_dim),
             nn.GELU(),
-            nn.Linear(network_hidden_layers[-1], n_reward_steps)
+            nn.Linear(self.encoding_dim, n_reward_steps)
         )
 
         self.apply(init_weights)

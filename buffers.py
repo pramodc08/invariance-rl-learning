@@ -3,6 +3,8 @@ import numpy as np
 from collections import namedtuple, deque
 
 
+CLIP_THRESHOLD = 100.0
+
 class ReplayBuffer:
     """
     Standard Replay Buffer.
@@ -55,7 +57,7 @@ class ReplayBuffer:
         for i in range(0, self.n_reward_steps):
             if i < len(self.temporal_buffer):
                 step = self.temporal_buffer[i]
-                clip_reward = float(step["reward"]) # float(np.clip(step["reward"], -1.0, 1.0))
+                clip_reward = float(np.clip(step["reward"], -1.0 * CLIP_THRESHOLD, 1.0 * CLIP_THRESHOLD))
                 future_rewards.append(clip_reward)
                 future_actions.append(step["action"])
             else:
@@ -168,7 +170,7 @@ class HiddenStateReplayBuffer:
         for i in range(0, self.n_reward_steps):
             if i < len(self.temporal_buffer):
                 step = self.temporal_buffer[i]
-                clip_reward = float(step["reward"]) # float(np.clip(step["reward"], -1.0, 1.0))
+                clip_reward = float(np.clip(step["reward"], -1.0 * CLIP_THRESHOLD, 1.0 * CLIP_THRESHOLD))
                 future_rewards.append(clip_reward)
                 future_actions.append(step["action"])
             else:

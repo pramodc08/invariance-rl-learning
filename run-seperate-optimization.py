@@ -238,7 +238,7 @@ def run(config: dict):
                     for _ in range(len(envs)):
                         loss_values = {
                             "q_loss": [],
-                            "reward_loss": [],
+                            "reward_prediction_loss": [],
 
                             "grl_loss": [],
                             "grl_loss_weigthed": [],
@@ -349,8 +349,8 @@ def run(config: dict):
                             
                             loss_values["aux_loss"].append((aux_loss).item())
 
-                        agent.irm_penalty_multiplier = float(min(i_episode, 1500)/1500.0*100.0) ** 1.6
-                        agent.vrex_penalty_multiplier = float(min(i_episode, 1500)/1500.0*100.0) ** 1.6
+                        agent.irm_penalty_multiplier = 0.0 # float(min(i_episode, 1500)/1500.0*100.0) ** 1.6
+                        agent.vrex_penalty_multiplier = 0.0 # float(min(i_episode, 1500)/1500.0*100.0) ** 1.6
                         agent.soft_update(agent.qnetwork_local, agent.qnetwork_target, agent.tau)
                         if agent.lr_decay is not None and agent.lr_decay != 1.0:
                             for param_group in agent.optimizer.param_groups:

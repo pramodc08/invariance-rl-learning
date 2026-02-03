@@ -7,13 +7,13 @@ save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Disjoint-Explicit-Seperate-buffer-VReX-Default-Weight-decay-0.001"
+title = "Explicit-Seperate-Buffer-64-64-64-DRO-LR-0.00005-1e-4-WeightDecay"
 
 [AGENT]
 device = "cpu"
 recurrent = false
 network_hidden_layers = [64, 64, 64]
-lr = 0.0001
+lr = 0.00005
 lr_decay = 1.0
 replay_buffer_size = 50000
 batch_size = 64
