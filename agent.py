@@ -117,8 +117,8 @@ class Agent:
                  tau=1e-3, update_every=5, n_epochs=1, steps_before_learning=0,
                  clip_grad=1.0, lr_decay=1.0, n_envs=3, n_reward_steps=3,
                  weight_decay=1e-4,
-                 irm_lambda=0.0, irm_penalty_multiplier=0.0, #1.0,
-                 dro_lambda=1.0, dro_weight=0.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0, 
+                 irm_lambda=1.0, irm_penalty_multiplier=0.0, #1.0,
+                 dro_lambda=0.0, dro_weight=0.0, dro_mode='hard_max', dro_step_size=0.01, dro_group_decay=0.0, 
                  grl_lambda=0.0, grl_weight=0.0, grl_alpha=1.0,
                  vrex_lambda=0.0, vrex_penalty_multiplier=0.0, # 10.0
                 ):
@@ -451,11 +451,11 @@ def calculate_irm_loss(agent, features, experiences):
         states, actions, rewards, next_states, dones, env_ids, f_rewards, f_actions  = experiences
 
     predicted_rewards = features[2] * scale
-    
-    raw_loss = F.smooth_l1_loss(predicted_rewards, f_rewards, reduction="none")
-    
-    grad = torch.autograd.grad(raw_loss.mean(), scale, create_graph=True)[0]
+    irl_loss = F.smooth_l1_loss(predicted_rewards, f_rewards, reduction="none")
+    grad = torch.autograd.grad(irl_loss.mean(), scale, create_graph=True)[0]
     grad_loss = torch.sum(grad ** 2)
+
+    raw_loss = F.smooth_l1_loss(features[2], f_rewards, reduction="none")
 
     return grad_loss, raw_loss.mean()
 

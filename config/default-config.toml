@@ -7,13 +7,13 @@ save_dir = "model"
 save_frames = false
 visualization_path = "videos"
 log_dir = "logs"
-title = "Explicit-Seperate-Buffer-64-64-64-DRO-LR-0.00005-1e-4-WeightDecay"
+title = "Explicit-Seperate-Buffer-Optimization-IRM"
 
 [AGENT]
 device = "cpu"
 recurrent = false
 network_hidden_layers = [64, 64, 64]
-lr = 0.00005
+lr = 0.00001
 lr_decay = 1.0
 replay_buffer_size = 50000
 batch_size = 64
@@ -25,7 +25,7 @@ network_update_freq = 5
 n_epochs = 1
 epsilon_initial = 1.0
 epsilon_final = 0.01
-epsilon_decay = 0.995
+epsilon_decay = 0.9995
 n_reward_steps = 3
 
 [ENVIRONMENT]
